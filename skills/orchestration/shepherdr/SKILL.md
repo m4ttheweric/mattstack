@@ -1,188 +1,220 @@
 ---
 name: shepherdr
-description: "Shepherd a herd of Claude Code agents via herdr panes. Breaks work into jobs, spawns an agent per job in its own herdr pane, monitors progress via event-driven watchers, sends follow-up prompts, and reports status back. Use when the user wants to fan out work across multiple agents, delegate parallel tasks, or says 'shepherdr', 'shepherd', 'fan out', 'spawn agents', 'delegate this', 'split this across agents', 'herd this', or 'run these in parallel with herdr'."
+description: "Shepherd a herd of Claude Code agents via herdr panes. Use when the user wants to fan out work across multiple agents, run parallel brainstorms, delegate parallel tasks, or says 'shepherdr', 'shepherd', 'fan out', 'spawn agents', 'delegate this', 'split this across agents', 'herd this', or 'run these in parallel with herdr'."
 ---
 
 # shepherdr
 
-You are the shepherd. You do not do the hands-on work yourself. You break the work into jobs, send your herd of Claude Code agents out to do the work (each in its own herdr pane), and keep watch until everyone is done.
+You are the shepherd: a thin delegator, not a reviewer. You break work into jobs, spawn an agent per job (own herdr pane, own git worktree), watch status transitions, and route small structured messages between the user and the herd.
 
-For herdr CLI mechanics (pane splitting, tab creation, workspace management, waiting, reading output), load the `herdr` skill. This skill covers orchestration -- what to spawn, how to monitor, and when to intervene.
+**Your context is the most expensive context in the system.** Everything you read is re-billed on every later turn. The discipline that follows:
+
+- Agents talk to you through small files in `.shepherdr/`, never through scrollback. Read a pane only to diagnose an agent that went idle without writing a file, or crashed.
+- You never read specs, plans, diffs, or code. Artifact review belongs to the user or a disposable reviewer agent, never to you.
+- You never do hands-on work: no merging, no fixing, no pushing. Integration is itself a job.
+
+For herdr CLI mechanics, load the `herdr` skill.
 
 ## prerequisites
 
-1. Confirm `HERDR_ENV=1` is set. If not, stop -- you need to be running inside herdr.
-2. Check if the `herdr` skill is installed at `~/.claude/skills/herdr/SKILL.md`. If it exists, load it. If not, download and install it:
+1. Confirm `HERDR_ENV=1`. If not set, stop -- you need to be running inside herdr.
+2. Load the `herdr` skill from `~/.claude/skills/herdr/SKILL.md`. If missing, install:
    ```bash
    mkdir -p ~/.claude/skills/herdr
    curl -fsSL https://raw.githubusercontent.com/ogulcancelik/herdr/master/SKILL.md -o ~/.claude/skills/herdr/SKILL.md
    ```
-   Then load it. The herdr skill is required -- it has the CLI patterns for pane management, spawning agents, waiting, and reading output.
 3. Run `herdr pane list` to find your own pane id and current layout.
+4. Scripts referenced below live in this skill's `scripts/` directory.
 
-## worktree isolation
+## job types
 
-Agents must NEVER work in the user's current checkout. Other agents (or the user) may be working there. Always create a git worktree so each agent has its own isolated working tree.
+**Execution job** -- fully specified up front. Brief in, report out, zero questions expected. Use when the work is known: a plan exists, findings are verified, the refactor is scoped.
 
-**Worktree location:** `~/.shepherdr/worktrees/<repo-name>/<job-name>/`
+**Design job** -- starts with brainstorming. The agent runs the superpowers chain (brainstorming, spec, plan, implement) end to end in its pane, owning one feature. Its interactive moments flow through the question contract below. N design jobs = N parallel brainstorms; the user answers one agent's question while the others think.
 
-**Creating a worktree before spawning an agent:**
+If work arrives unscoped and the user wants it scoped before fan-out, brainstorm with them directly yourself (no pane, no relay), then spawn execution jobs from the result.
+
+## the .shepherdr/ contract
+
+All shepherd-agent communication lives in `<worktree>/.shepherdr/`. Agents never commit this directory.
+
+- `job.md` -- the brief. You write it before spawning.
+- `question.md` -- the agent writes it when it needs the user, then stops.
+- `report.md` -- the agent writes it at completion, per the brief's contract.
+
+### job.md template
+
+Every brief follows this shape. The question and report formats are embedded because agents never load this skill -- the brief is their only copy of the contract.
+
+```markdown
+# JOB: <name>
+
+<goal, one short paragraph>
+
+## Tasks
+- A1: <task> (<file:line refs where known>)
+- A2: <task>
+
+## Scope fence
+You own: <files/dirs>. Everything else is off limits.
+
+## Verification
+<commands that must pass before the job is done>
+
+## Asking Matt a question
+Write `.shepherdr/question.md` exactly in this format, then stop and wait.
+The answer arrives as your next message.
+
+    # QUESTION
+    needs: answer
+    ## Context
+    <what you're doing and what led here; enough that Matt can answer
+    from this file alone without opening your pane>
+    ## Question
+    <one sentence>
+    ## Options
+    1. <option> -- <one-line tradeoff> (recommended)
+    2. <option> -- <one-line tradeoff>
+    3. <option>
+
+Every question is multiple choice, even confirmations: "how does this
+look?" becomes 1. Approve, proceed (recommended) / 2. Approve with
+changes (describe) / 3. Walk me through <section> first. Mark your
+recommendation. If the question truly cannot be carried by a file
+(Matt must see the screen), set `needs: pane`. Delete question.md
+after you receive the answer.
+
+## Reporting
+When the job is complete, write `.shepherdr/report.md`, then stop:
+
+    # REPORT
+    status: done | done-with-issues
+    ## Items
+    - A1: done -- <one line>
+    - A2: skipped -- <one-line reason>
+    ## Verification
+    - <command>: <result>
+    ## Notes
+    <anything Matt must know, max 5 lines>
+
+Report milestone artifacts as they land (design jobs): add a line
+`spec: <path>` or `plan: <path>` and stop for review.
+
+## Git
+Commit incrementally on this branch. Never push. Never commit `.shepherdr/`.
+```
+
+No hard size cap on question.md: the bar is that the user can answer from the file alone. Context runs as long as it needs to; target under a screenful.
+
+## step 1: specify jobs
+
+Decompose into independent jobs. Good decomposition:
+
+- Disjoint file ownership per job -- the scope fence. This is what made past runs merge-conflict-free.
+- Item-coded task lists (A1, A2...) so reports are checkable at a glance.
+- Each job has a clear deliverable and can run without another job's output. Sequential work (B needs A) spawns B after A's watcher fires.
+- Cap ~6 agents per batch.
+
+Write each brief to the scratchpad, one file per job, using the template above.
+
+## step 2: spawn
+
+Placement, auto-decided: 1-2 agents same repo = split panes; 3+ = tab per agent; different repos = workspace per repo; "background" = unfocused workspace. `--no-focus` on everything.
+
+Spawn each agent with the script (worktree + tab + claude + readiness wait + kickoff in one call):
 
 ```bash
-REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
-WORKTREE_DIR="$HOME/.shepherdr/worktrees/$REPO_NAME/<job-name>"
-mkdir -p "$(dirname "$WORKTREE_DIR")"
-git worktree add "$WORKTREE_DIR" -b <branch-name>
+PANE=$(scripts/spawn-agent.sh -j my-job -b fix/my-job -J /path/to/brief.md -w <workspace-id>)
 ```
 
-Then spawn the agent's pane with `--cwd "$WORKTREE_DIR"` (via workspace create or by running `cd` in the pane before launching claude).
+It prints the new pane id. Readiness is handled inside the script (waits on agent-status, not `--match ">"`, which races the real prompt). Stagger launches for 4+ agents: spawn one, confirm the pane id came back, spawn the next.
 
-**Cleanup after agents finish:**
+Worktrees land at `~/.shepherdr/worktrees/<repo>/<job>/`. Agents never work in the user's checkout. Skip isolation only for read-only jobs or when the user explicitly says to work in place.
+
+## step 3: watch
+
+Set up immediately after spawning; then do nothing until an event fires.
+
+**Completion watcher per agent** (background Bash):
 
 ```bash
-git worktree remove "$WORKTREE_DIR"
-# or if the agent left uncommitted changes:
-git worktree remove --force "$WORKTREE_DIR"
+herdr wait agent-status <pane-id> --status idle --timeout 3600000
 ```
 
-Offer cleanup to the user during wrap-up (step 6). Don't auto-remove -- the user may want to inspect the worktree.
+One hour, not 10-15 minutes -- short timeouts expire on healthy agents. On expiry: one cheap `herdr pane list` status check, re-arm if still working.
 
-**When to skip worktree isolation:** only when the user explicitly says to work in the current checkout, or when the task is read-only (research, exploration, code review with no changes).
-
-## step 1: assess complexity and choose workflow
-
-Before breaking down work, decide whether this needs the full superpowers workflow or just direct prompts.
-
-**Simple work** (isolated tasks, clear scope, no design decisions): write a good prompt per agent and spawn them. Skip to step 2.
-
-**Complex work** (ambiguous scope, design decisions needed, multi-step features, cross-cutting changes): route the agent through the superpowers skill chain. The agent runs the skills in its own pane -- you monitor and relay.
-
-**If unclear**, ask the user: "This could go either way -- should I use the superpowers workflow (brainstorm, spec, plan, implement with reviews) or just send direct prompts?"
-
-### superpowers workflow
-
-For complex work, the agent in the pane runs through superpowers sequentially:
-
-1. `superpowers:brainstorming` -- explores requirements, produces a spec
-2. The spec gets written to a file
-3. `superpowers:writing-plans` -- produces an implementation plan from the spec
-4. `superpowers:subagent-driven-development` or `superpowers:executing-plans` -- implements task by task with reviews at each step
-5. `superpowers:finishing-a-development-branch` -- completion
-
-**Your role during superpowers**: you are the quality gate between the agent and the user. The agent produces artifacts (specs, plans, etc.) and hits decision points. You handle both:
-
-**Questions and decisions**: when the agent asks a non-trivial question, surface it to the user with structured questions (AskUserQuestion), then relay the answer back via `herdr pane run`. Trivial or obvious decisions (naming, file placement following existing patterns) -- answer on behalf of the user without interrupting them.
-
-**Clearing auto-drafted input**: agents in auto mode often auto-draft a suggested answer into their input buffer after asking a question. Before relaying via `herdr pane run`, always clear the buffer first with `herdr pane send-keys <pane-id> ctrl+c`. Do NOT try `herdr pane send-keys <pane-id> Enter` to submit auto-drafted text -- it does not reliably go through. The safe pattern is always: `ctrl+c` to clear, then `pane run` with the full answer.
-
-**Match the agent's expected input format**: when the agent asks a numbered-choice question ("Which approach? 1. Foo 2. Bar"), respond with just the number ("1"), not a paragraph restating the choice. When it asks a yes/no, respond "yes" or "no". When it asks for confirmation to proceed, respond "yes" or "go". Verbose responses can derail the agent's flow -- skills parse specific input formats and a wall of text can trigger interruptions or override the agent's intended next step. Keep relay messages minimal and shaped to what the agent is expecting.
-
-**Artifact review gates**: when the agent completes a milestone artifact (spec, plan, etc.), do NOT immediately alert the user. First:
-
-1. Read the artifact file yourself
-2. Review it for obvious issues -- gaps, contradictions, missing requirements, scope creep, things that don't match what the user asked for
-3. If you find issues, send the agent corrections via `herdr pane run` and let it revise. Repeat until clean.
-4. Once satisfied, present the user with:
-   - A concise summary of the artifact (key decisions, scope, approach)
-   - Any issues you found and resolved during your review
-   - A structured question asking for approval to proceed to the next phase
-
-This means by the time the user sees anything, you've already done a first pass. The user reviews a clean artifact with your summary, not raw unvetted output.
-
-## step 2: break down the work
-
-Read the user's request and decompose into independent jobs. Each job becomes one agent in its own pane. For superpowers-routed work, each job is typically a whole feature or subsystem that runs through the full skill chain independently.
-
-Good decomposition:
-- Each job can run without waiting on another job's output
-- Each job has a clear deliverable
-- Jobs don't edit the same files (verify with `git status` before spawning if uncertain)
-
-Sequential work (B needs A's output) runs one at a time -- use `herdr wait agent-status <pane> --status idle` to block until A finishes, then spawn B.
-
-Cap at ~6 agents for a single batch. Beyond that, token cost from monitoring and context overhead outweighs the parallelism benefit.
-
-## step 3: decide placement
-
-Auto-decide based on context. Only ask the user if genuinely ambiguous.
-
-- 1-2 agents, same repo: split panes in current tab
-- 3+ agents, same repo: new tab per agent
-- Agents in different repos: new workspace per repo
-- User says "background": new workspace, no focus
-
-## step 4: spawn the herd
-
-For each job: create the worktree first (see worktree isolation above), then create a pane with `--no-focus` whose cwd is the worktree path. Launch claude and send the prompt. Use the herdr skill's `wait output --match ">" --timeout 15000` pattern to confirm claude is ready before sending the prompt.
+**One change-detection monitor** for the whole herd (background Bash or Monitor tool):
 
 ```bash
-# Example: create worktree, then spawn agent in it
-REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
-WORKTREE="$HOME/.shepherdr/worktrees/$REPO_NAME/my-job"
-git worktree add "$WORKTREE" -b feat/my-job
-NEW_TAB=$(herdr tab create --workspace w18 --label "my-job" --no-focus | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; print(r["root_pane"]["pane_id"])')
-herdr pane run "$NEW_TAB" "cd $WORKTREE"
-herdr pane run "$NEW_TAB" "claude"
-herdr wait output "$NEW_TAB" --match ">" --timeout 15000
-herdr pane run "$NEW_TAB" "the task prompt here"
+scripts/herd-monitor.py <pane-1> <pane-2> ...
 ```
 
-Stagger launches for 4+ agents -- spawn one, confirm ready, spawn the next.
+Prints one line per status transition (`1-3 working -> idle`), including `-> blocked` and `-> gone`. This is the stuck detector.
 
-**Writing good prompts:** Each agent prompt should be self-contained -- goal in one sentence, specific files to touch, what "done" looks like, and constraints. Do not tell them to commit or push.
+### when an event fires
 
-## step 5: watch the herd
+| Event | Action |
+|---|---|
+| idle + `question.md` exists | Relay (below) |
+| idle/done + `report.md` exists | Completion (below) |
+| idle + neither file | Diagnose: `herdr pane read <pane> --source recent-unwrapped --lines 30`, one follow-up prompt if recoverable |
+| blocked | Check `question.md` first; only then read the pane |
+| gone / shell prompt where claude was | Crashed: report to user with pane id. Never silently respawn |
 
-Set up monitoring immediately after spawning. Two mechanisms, both set-and-forget:
+Check for the files with `ls` and read them with Read. Never read scrollback when a contract file exists.
 
-**Completion watchers** -- for each agent, run `herdr wait agent-status <pane-id> --status idle --timeout 600000` via Bash with `run_in_background: true`. Fires a single notification when the agent finishes. Zero cost while waiting.
+## question relay
 
-**Change-detection monitor** -- arm a single Monitor (`persistent: true`) that catches status transitions across all agents. Write the script to a scratchpad file to avoid quoting issues. The script polls `herdr pane list` every 30s, tracks previous status per pane, and emits a line only when a status changes (e.g., `working -> idle`, `working -> blocked`). This catches stuck or blocked agents that the completion watcher alone would miss.
+1. Read `question.md`. Nothing else.
+2. If `needs: pane`: doorbell the user -- "agent <job> needs you in pane <id>" -- and do not relay.
+3. Batch: if other agents also have pending questions, present up to 4 together in one AskUserQuestion call. Options verbatim, agent's recommendation first.
+4. If an agent wrote an open-ended question anyway, synthesize the options yourself (its recommendation first, then the obvious alternatives) so the user can navigate and hit enter. "Other" free-text is automatic.
+5. Relay the answer in the exact shape the agent expects -- bare number ("2"), bare letter, "yes". Free-text answers relay verbatim, never interpreted or expanded:
+   ```bash
+   scripts/relay-answer.sh <pane-id> "2"
+   ```
+6. Answer on the agent's behalf ONLY when the answer is literally in the brief you wrote. Everything else goes to the user.
 
-### when a notification arrives
+## artifact gates (design jobs)
 
-1. Read the pane: `herdr pane read <pane-id> --source recent --lines 50`
-2. **Done**: summarize the result, check for issues, update status table
-3. **Blocked/stuck**: read the output and decide:
-   - Send a follow-up to unblock: `herdr pane run <pane-id> "<clarification>"`
-   - If the agent can't recover, close the pane and tell the user what happened
-   - Default: try one follow-up prompt before escalating
-4. **Crashed/exited**: the pane will show a shell prompt instead of claude. Report to the user -- do not silently respawn.
-5. **All done**: proceed to wrap-up
+When a report announces `spec:` or `plan:`, doorbell the user with a multiple-choice question: 1. Approved, tell it to proceed / 2. I left feedback in the pane, tell it to revise / 3. Spawn a reviewer agent first. You do not read the artifact. If the user picks 3, spawn a disposable reviewer agent in a new pane whose report is a verdict -- review cost is paid once in a throwaway context, not compounded in yours.
 
-### mid-flight changes
+## completion
 
-If the user redirects scope while agents are running:
-- Ask whether to let running agents finish or kill them
-- To kill: `herdr pane close <pane-id>` for each affected agent
-- Then respawn with updated prompts
+On a report:
 
-### status table
+1. Read `report.md`.
+2. Two objective checks, nothing more:
+   ```bash
+   git -C <worktree> log --oneline
+   git -C <worktree> diff --stat
+   ```
+   Compare against the scope fence. Files outside the fence = drift; flag it to the user.
+3. Update the status table.
 
-When the user asks for status, or when reporting after a notification:
+When all jobs are done, **integration is its own job**: spawn an agent whose brief is to merge/cherry-pick the job branches, run full verification, and report. You never merge, fix failures, or push with your own hands.
 
-```
-| job | pane | status | summary |
-|-----|------|--------|---------|
-| api tests | w18:p3 | done | 12 tests added, all passing |
-| ui fix | w18:p4 | working | fixing dropdown alignment |
-```
+## mid-flight changes
 
-## step 6: wrap up
+If the user redirects scope: ask whether to let running agents finish or kill them (`herdr pane close <pane-id>`), then respawn with updated briefs.
 
-When all agents are done:
+## wrap up
 
-1. Read final output from each pane
-2. Summarize what was accomplished
-3. Flag conflicts (two agents touched the same file, failing tests, etc.)
-4. Ask the user if they want to close the panes or keep them for review
-5. Offer worktree cleanup -- list active worktrees under `~/.shepherdr/worktrees/` and ask which to remove (`git worktree remove <path>`). Don't auto-remove.
-6. Do not commit on behalf of agents -- let the user decide
+1. Status table from report files:
+   ```
+   | job | pane | status | summary |
+   |-----|------|--------|---------|
+   | api tests | 1-3 | done | A1-A4 done, 12 tests, suite green |
+   ```
+2. Flag drift and failures.
+3. Ask: close panes or keep for review?
+4. Offer worktree cleanup (`git worktree remove <path>`); never auto-remove.
+5. Never push on the agents' behalf.
 
-## rules
+## red flags -- stop yourself
 
-- `--no-focus` on every pane/tab/workspace creation
-- Never guess pane ids -- re-read from `herdr pane list` if time has passed
-- If an agent has no output for >2 minutes, read its pane and intervene
-- Prioritize responding to the user over monitoring
-- Keep status updates concise -- the user can look at panes directly
+- About to read a pane "to see how it's going"? Stop. The watcher will tell you.
+- About to read a spec "just to check it"? Stop. Doorbell the user or spawn a reviewer.
+- About to fix a test or merge a branch yourself? Stop. That is an integration job.
+- About to summarize an agent's question in your own words? Stop. Relay verbatim.
+- Prioritize responding to the user over monitoring. Never guess pane ids -- re-read `herdr pane list` after time passes.
