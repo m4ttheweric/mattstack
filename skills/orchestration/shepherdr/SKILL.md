@@ -20,6 +20,35 @@ For herdr CLI mechanics (pane splitting, tab creation, workspace management, wai
    Then load it. The herdr skill is required -- it has the CLI patterns for pane management, spawning agents, waiting, and reading output.
 3. Run `herdr pane list` to find your own pane id and current layout.
 
+## worktree isolation
+
+Agents must NEVER work in the user's current checkout. Other agents (or the user) may be working there. Always create a git worktree so each agent has its own isolated working tree.
+
+**Worktree location:** `~/.shepherdr/worktrees/<repo-name>/<job-name>/`
+
+**Creating a worktree before spawning an agent:**
+
+```bash
+REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
+WORKTREE_DIR="$HOME/.shepherdr/worktrees/$REPO_NAME/<job-name>"
+mkdir -p "$(dirname "$WORKTREE_DIR")"
+git worktree add "$WORKTREE_DIR" -b <branch-name>
+```
+
+Then spawn the agent's pane with `--cwd "$WORKTREE_DIR"` (via workspace create or by running `cd` in the pane before launching claude).
+
+**Cleanup after agents finish:**
+
+```bash
+git worktree remove "$WORKTREE_DIR"
+# or if the agent left uncommitted changes:
+git worktree remove --force "$WORKTREE_DIR"
+```
+
+Offer cleanup to the user during wrap-up (step 6). Don't auto-remove -- the user may want to inspect the worktree.
+
+**When to skip worktree isolation:** only when the user explicitly says to work in the current checkout, or when the task is read-only (research, exploration, code review with no changes).
+
 ## step 1: assess complexity and choose workflow
 
 Before breaking down work, decide whether this needs the full superpowers workflow or just direct prompts.
@@ -43,6 +72,10 @@ For complex work, the agent in the pane runs through superpowers sequentially:
 **Your role during superpowers**: you are the quality gate between the agent and the user. The agent produces artifacts (specs, plans, etc.) and hits decision points. You handle both:
 
 **Questions and decisions**: when the agent asks a non-trivial question, surface it to the user with structured questions (AskUserQuestion), then relay the answer back via `herdr pane run`. Trivial or obvious decisions (naming, file placement following existing patterns) -- answer on behalf of the user without interrupting them.
+
+**Clearing auto-drafted input**: agents in auto mode often auto-draft a suggested answer into their input buffer after asking a question. Before relaying via `herdr pane run`, always clear the buffer first with `herdr pane send-keys <pane-id> ctrl+c`. Do NOT try `herdr pane send-keys <pane-id> Enter` to submit auto-drafted text -- it does not reliably go through. The safe pattern is always: `ctrl+c` to clear, then `pane run` with the full answer.
+
+**Match the agent's expected input format**: when the agent asks a numbered-choice question ("Which approach? 1. Foo 2. Bar"), respond with just the number ("1"), not a paragraph restating the choice. When it asks a yes/no, respond "yes" or "no". When it asks for confirmation to proceed, respond "yes" or "go". Verbose responses can derail the agent's flow -- skills parse specific input formats and a wall of text can trigger interruptions or override the agent's intended next step. Keep relay messages minimal and shaped to what the agent is expecting.
 
 **Artifact review gates**: when the agent completes a milestone artifact (spec, plan, etc.), do NOT immediately alert the user. First:
 
@@ -80,7 +113,19 @@ Auto-decide based on context. Only ask the user if genuinely ambiguous.
 
 ## step 4: spawn the herd
 
-For each job: create a pane with `--no-focus` (split, new tab, or new workspace -- see herdr skill's spawn-agent recipe), then launch claude and send the prompt. Use the herdr skill's `wait output --match ">" --timeout 15000` pattern to confirm claude is ready before sending the prompt.
+For each job: create the worktree first (see worktree isolation above), then create a pane with `--no-focus` whose cwd is the worktree path. Launch claude and send the prompt. Use the herdr skill's `wait output --match ">" --timeout 15000` pattern to confirm claude is ready before sending the prompt.
+
+```bash
+# Example: create worktree, then spawn agent in it
+REPO_NAME=$(basename "$(git rev-parse --show-toplevel)")
+WORKTREE="$HOME/.shepherdr/worktrees/$REPO_NAME/my-job"
+git worktree add "$WORKTREE" -b feat/my-job
+NEW_TAB=$(herdr tab create --workspace w18 --label "my-job" --no-focus | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; print(r["root_pane"]["pane_id"])')
+herdr pane run "$NEW_TAB" "cd $WORKTREE"
+herdr pane run "$NEW_TAB" "claude"
+herdr wait output "$NEW_TAB" --match ">" --timeout 15000
+herdr pane run "$NEW_TAB" "the task prompt here"
+```
 
 Stagger launches for 4+ agents -- spawn one, confirm ready, spawn the next.
 
@@ -131,7 +176,8 @@ When all agents are done:
 2. Summarize what was accomplished
 3. Flag conflicts (two agents touched the same file, failing tests, etc.)
 4. Ask the user if they want to close the panes or keep them for review
-5. Do not commit on behalf of agents -- let the user decide
+5. Offer worktree cleanup -- list active worktrees under `~/.shepherdr/worktrees/` and ask which to remove (`git worktree remove <path>`). Don't auto-remove.
+6. Do not commit on behalf of agents -- let the user decide
 
 ## rules
 
