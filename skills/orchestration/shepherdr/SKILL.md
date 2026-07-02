@@ -117,7 +117,7 @@ Decompose into independent jobs. Good decomposition:
 
 Write each brief to the scratchpad, one file per job, using the template above.
 
-**Single-job case:** if decomposition yields exactly one job, suggest skipping the herd. Offer to do the work yourself, here in the main pane, but still in a worktree (`~/.shepherdr/worktrees/<repo>/<job>/`, same creation steps) so it stays isolated from the user's checkout. One agent behind a relay is pure overhead. The delegator rules above protect your context while orchestrating a herd; with no herd, they don't apply -- work hands-on as normal. If the user prefers a separate pane anyway (e.g. to keep this session free), spawn as usual.
+**Single-job case:** if decomposition yields exactly one job, push back: tell the user "this is probably not the right skill for this" and do the work yourself, here in the main pane. Never spawn a single pane -- one agent behind a relay is pure overhead. Still create the worktree (`~/.shepherdr/worktrees/<repo>/<job>/`, same creation steps) so the work stays isolated from the user's checkout. The delegator rules above protect your context while orchestrating a herd; with no herd, they don't apply -- work hands-on as normal.
 
 ## step 2: spawn
 
