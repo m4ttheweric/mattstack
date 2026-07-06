@@ -2,20 +2,25 @@
 # Spawn one shepherdr agent: worktree + herdr tab + claude + kickoff prompt.
 #
 # Usage:
-#   spawn-agent.sh -j <job-name> -b <branch> -J <path-to-job-brief.md> -w <workspace-id>
-#                  [-r <repo-root>] [-k <kickoff-text>]
+#   spawn-agent.sh -j <job-name> (-b <branch> | -d <existing-dir>) -J <brief.md>
+#                  -w <workspace-id> [-r <repo-root>] [-k <kickoff-text>] [-m <model>]
 #
-# Creates the worktree at ~/.shepherdr/worktrees/<repo>/<job-name>, copies the
-# brief to <worktree>/.shepherdr/job.md, opens a --no-focus tab in the given
-# workspace, launches claude, waits for readiness, sends the kickoff prompt.
+# With -b: creates the worktree at ~/.shepherdr/worktrees/<repo>/<job-name>.
+# With -d: uses the existing directory as-is (no git worktree add); any branch
+# must already be provisioned there. -m launches claude with --model <model>.
+# Copies the brief to <worktree>/.shepherdr/job.md, opens a --no-focus tab in
+# the given workspace, launches claude, waits for readiness, sends the kickoff.
 # Prints the new pane id on stdout; everything else goes to stderr.
 set -euo pipefail
 
-usage() { sed -n '2,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+usage() { sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 
 REPO_ROOT=""
 KICKOFF=""
-while getopts "j:b:J:w:r:k:" opt; do
+BRANCH=""
+DIR=""
+MODEL=""
+while getopts "j:b:J:w:r:k:d:m:" opt; do
   case "$opt" in
     j) JOB="$OPTARG" ;;
     b) BRANCH="$OPTARG" ;;
@@ -23,18 +28,27 @@ while getopts "j:b:J:w:r:k:" opt; do
     w) WORKSPACE="$OPTARG" ;;
     r) REPO_ROOT="$OPTARG" ;;
     k) KICKOFF="$OPTARG" ;;
+    d) DIR="$OPTARG" ;;
+    m) MODEL="$OPTARG" ;;
     *) usage ;;
   esac
 done
-: "${JOB:?-j job-name required}" "${BRANCH:?-b branch required}"
+: "${JOB:?-j job-name required}"
 : "${JOB_MD:?-J job brief path required}" "${WORKSPACE:?-w workspace id required}"
-[ -n "$REPO_ROOT" ] || REPO_ROOT="$(git rev-parse --show-toplevel)"
+if [ -n "$DIR" ] && [ -n "$BRANCH" ]; then echo "spawn-agent: -b and -d are mutually exclusive" >&2; exit 2; fi
+if [ -z "$DIR" ] && [ -z "$BRANCH" ]; then echo "spawn-agent: one of -b <branch> or -d <existing-dir> is required" >&2; exit 2; fi
 [ -f "$JOB_MD" ] || { echo "job brief not found: $JOB_MD" >&2; exit 1; }
 
-REPO_NAME="$(basename "$REPO_ROOT")"
-WORKTREE="$HOME/.shepherdr/worktrees/$REPO_NAME/$JOB"
-mkdir -p "$(dirname "$WORKTREE")"
-git -C "$REPO_ROOT" worktree add "$WORKTREE" -b "$BRANCH" >&2
+if [ -n "$DIR" ]; then
+  [ -d "$DIR" ] || { echo "directory not found: $DIR" >&2; exit 1; }
+  WORKTREE="$DIR"
+else
+  [ -n "$REPO_ROOT" ] || REPO_ROOT="$(git rev-parse --show-toplevel)"
+  REPO_NAME="$(basename "$REPO_ROOT")"
+  WORKTREE="$HOME/.shepherdr/worktrees/$REPO_NAME/$JOB"
+  mkdir -p "$(dirname "$WORKTREE")"
+  git -C "$REPO_ROOT" worktree add "$WORKTREE" -b "$BRANCH" >&2
+fi
 
 mkdir -p "$WORKTREE/.shepherdr"
 cp "$JOB_MD" "$WORKTREE/.shepherdr/job.md"
@@ -43,7 +57,7 @@ PANE="$(herdr tab create --workspace "$WORKSPACE" --label "$JOB" --no-focus \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')"
 
 herdr pane run "$PANE" "cd $WORKTREE"
-herdr pane run "$PANE" "claude"
+herdr pane run "$PANE" "claude${MODEL:+ --model $MODEL}"
 
 # Readiness: wait for herdr to detect the agent and see it idle. Matching
 # --match ">" races the real prompt char and produces dead kickoff prompts.
