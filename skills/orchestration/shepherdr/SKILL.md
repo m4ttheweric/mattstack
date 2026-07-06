@@ -58,6 +58,10 @@ Every brief follows this shape. The question and report formats are embedded bec
 ## Scope fence
 You own: <files/dirs>. Everything else is off limits.
 
+## Repo conventions
+<the collected conventions that bind this job: A0 setup commands, branch
+policy, gates to load (absolute paths). "none" if the repo has no rules.>
+
 ## Verification
 <commands that must pass before the job is done>
 
@@ -106,6 +110,19 @@ Commit incrementally on this branch. Never push. Never commit `.shepherdr/`.
 
 No hard size cap on question.md: the bar is that the user can answer from the file alone. Context runs as long as it needs to; target under a screenful.
 
+## repo conventions travel in the brief
+
+Job worktrees live outside the user's checkout, so nothing that applies by path ever reaches an agent: auto-loaded workflow skills, CLAUDE.md rules, installed dependencies, synced env. The brief is the only carrier.
+
+Before writing briefs, collect the repo's development conventions from two places: workflow rules already loaded in your session, and the repo's convention docs (CLAUDE.md, AGENTS.md, CONTRIBUTING or equivalent). This read is orchestration input, not artifact review -- it is permitted; specs, plans, diffs, and code stay off limits. Fold what binds each job into its `Repo conventions` section.
+
+Where each kind lands:
+
+- **Post-create setup** (dependency install, env/secrets sync): task A0 of every brief -- a fresh worktree has none of the checkout's state.
+- **Branch naming**: the name you pass to spawn's `-b`. If branches derive from tickets, resolve the ticket first. No repo rule = any name; branches that never ship are ephemeral.
+- **Mandatory gates** (skills or docs that must be applied before touching certain paths): name them in the brief with absolute paths -- agents outside the checkout won't trigger them on their own.
+- **Shipping process** (target branch, MR conventions, CI): goes in the integration job's brief, including where shipped work must land if the repo's workflow dictates it.
+
 ## step 1: specify jobs
 
 Decompose into independent jobs. Good decomposition:
@@ -126,7 +143,7 @@ Placement, auto-decided: 1-2 agents same repo = split panes; 3+ = tab per agent;
 Spawn each agent with the script (worktree + tab + claude + readiness wait + kickoff in one call):
 
 ```bash
-PANE=$(scripts/spawn-agent.sh -j my-job -b fix/my-job -J /path/to/brief.md -w <workspace-id>)
+PANE=$(scripts/spawn-agent.sh -j my-job -b <branch> -J /path/to/brief.md -w <workspace-id>)
 ```
 
 It prints the new pane id. Readiness is handled inside the script (waits on agent-status, not `--match ">"`, which races the real prompt). Stagger launches for 4+ agents: spawn one, confirm the pane id came back, spawn the next.
@@ -194,7 +211,7 @@ On a report:
    Compare against the scope fence. Files outside the fence = drift; flag it to the user.
 3. Update the status table.
 
-When all jobs are done, **integration is its own job**: spawn an agent whose brief is to merge/cherry-pick the job branches, run full verification, and report. You never merge, fix failures, or push with your own hands.
+When all jobs are done, **integration is its own job**: spawn an agent whose brief is to merge/cherry-pick the job branches, run full verification, and report. Its brief carries the repo's shipping conventions. You never merge, fix failures, or push with your own hands.
 
 ## mid-flight changes
 
