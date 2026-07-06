@@ -57,7 +57,7 @@ PANE="$(herdr tab create --workspace "$WORKSPACE" --label "$JOB" --no-focus \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')"
 
 herdr pane run "$PANE" "cd $WORKTREE"
-herdr pane run "$PANE" "claude${MODEL:+ --model $MODEL}"
+herdr pane run "$PANE" "claude${MODEL:+ --model '$MODEL'}"
 
 # Readiness: wait for herdr to detect the agent and see it idle. Matching
 # --match ">" races the real prompt char and produces dead kickoff prompts.
