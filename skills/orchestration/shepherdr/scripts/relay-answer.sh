@@ -11,3 +11,9 @@ PANE="$1"; shift
 herdr pane send-keys "$PANE" ctrl+c
 sleep 1
 herdr pane run "$PANE" "$*"
+
+# Paste detection can swallow the submit, leaving the answer in the input
+# box. Confirm the agent went back to work; nudge with Enter if it did not.
+if ! herdr wait agent-status "$PANE" --status working --timeout 8000 >/dev/null 2>&1; then
+  herdr pane send-keys "$PANE" Enter
+fi

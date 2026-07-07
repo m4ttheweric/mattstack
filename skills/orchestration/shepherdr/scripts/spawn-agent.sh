@@ -9,8 +9,10 @@
 # With -d: uses the existing directory as-is (no git worktree add); any branch
 # must already be provisioned there. -m launches claude with --model <model>.
 # Copies the brief to the job dir ~/.shepherdr/jobs/<repo>/<job-name>/job.md
-# (contract files never live inside the repo), opens a --no-focus tab in the
-# given workspace, launches claude, waits for readiness, sends the kickoff.
+# (contract files never live inside the repo), opens a --no-focus tab labeled
+# "<worktree>: <job>" in the given workspace, launches claude, waits for
+# readiness, sends the kickoff, and confirms it submitted (nudging with Enter
+# if paste detection swallowed it).
 # Prints the new pane id on stdout; everything else goes to stderr.
 set -euo pipefail
 
@@ -81,5 +83,14 @@ if [ -z "$KICKOFF" ]; then
   KICKOFF="Your job directory is $JOB_DIR -- it is outside the repo, and all job/question/report and scratch files belong there, NEVER in the repo or worktree. Read $JOB_DIR/job.md and complete the entire job it describes. Work only inside this worktree and stay within the brief's scope fence. The brief's verification commands must pass. Whenever you need input from Matt, write $JOB_DIR/question.md in the multiple-choice format the brief shows, then stop and wait; the answer arrives as your next message. Even yes/no confirmations become numbered options. When the job is complete, write $JOB_DIR/report.md per the brief, then stop. Commit incrementally on this branch; never push. The worktree must contain only the work itself."
 fi
 herdr pane run "$PANE" "$KICKOFF"
+
+# Claude's TUI can treat fast text+Enter as a paste, leaving the kickoff
+# sitting unsubmitted in the input box. Confirm the agent actually started
+# working; nudge with a bare Enter if it did not (harmless when it did).
+if ! herdr wait agent-status "$PANE" --status working --timeout 8000 >/dev/null 2>&1; then
+  herdr pane send-keys "$PANE" Enter
+  herdr wait agent-status "$PANE" --status working --timeout 8000 >/dev/null 2>&1 \
+    || echo "spawn-agent: kickoff may be unsubmitted in pane $PANE -- check its input box" >&2
+fi
 
 echo "$PANE"
