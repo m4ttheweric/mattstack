@@ -26,13 +26,23 @@ For herdr CLI mechanics, load the `herdr` skill.
 3. Run `herdr pane list` to find your own pane id and current layout.
 4. Scripts referenced below live in this skill's `scripts/` directory.
 
-## job types
+## job types and model tiering
 
 **Execution job** -- fully specified up front. Brief in, report out, zero questions expected. Use when the work is known: a plan exists, findings are verified, the refactor is scoped.
 
 **Design job** -- starts with brainstorming. The agent runs the superpowers chain (brainstorming, spec, plan, implement) end to end in its pane, owning one feature. Its interactive moments flow through the question contract below. N design jobs = N parallel brainstorms; the user answers one agent's question while the others think.
 
 If work arrives unscoped and the user wants it scoped before fan-out, brainstorm with them directly yourself (no pane, no relay), then spawn execution jobs from the result.
+
+### choosing the worker model
+
+**REQUIRED:** Read `model-tiering` (`~/.claude/skills/model-tiering/SKILL.md`)
+for the tier table, complexity signals, and the recursive principle. Pick the
+model per job from that table, pass it explicitly via `-m`. A spawn without
+`-m` inherits your session model, which silently defeats tiering.
+
+The user can override any tier. Domain-specific skills layered on top of
+shepherdr may set a floor (e.g., "never use model X for workers in this repo").
 
 ## the job-dir contract
 
@@ -152,8 +162,10 @@ Labels carry location: the sidebar label is the only thing that tells the user w
 Spawn each agent with the script (worktree + tab + claude + readiness wait + kickoff in one call):
 
 ```bash
-PANE=$(scripts/spawn-agent.sh -j my-job -b <branch> -J /path/to/brief.md -w <workspace-id>)
+PANE=$(scripts/spawn-agent.sh -j my-job -b <branch> -m <model> -J /path/to/brief.md -w <workspace-id>)
 ```
+
+Pick `<model>` from the tier table in "choosing the worker model" above.
 
 It prints the new pane id. Readiness is handled inside the script (waits on agent-status, not `--match ">"`, which races the real prompt). Stagger launches for 4+ agents: spawn one, confirm the pane id came back, spawn the next.
 
@@ -246,4 +258,6 @@ If the user redirects scope: ask whether to let running agents finish or kill th
 - About to read a spec "just to check it"? Stop. Doorbell the user or spawn a reviewer.
 - About to fix a test or merge a branch yourself? Stop. That is an integration job.
 - About to summarize an agent's question in your own words? Stop. Relay verbatim.
+- Spawn command without `-m`? The worker inherits your model -- probably the most expensive one.
+- Spawning Opus for a fully-specified execution job? That's overspending. Sonnet handles mechanical work.
 - Prioritize responding to the user over monitoring. Never guess pane ids -- re-read `herdr pane list` after time passes.
