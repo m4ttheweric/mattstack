@@ -58,7 +58,13 @@ mkdir -p "$JOB_DIR"
 cp "$JOB_MD" "$JOB_DIR/job.md"
 echo "spawn-agent: job dir $JOB_DIR" >&2
 
-PANE="$(herdr tab create --workspace "$WORKSPACE" --label "$JOB" --no-focus \
+# The sidebar label is how the user finds where a job lives: worktree name
+# first, then the job. Collapses to the job name when they are the same word
+# (-b mode names the worktree after the job).
+WT_NAME="$(basename "$WORKTREE")"
+if [ "$WT_NAME" = "$JOB" ]; then LABEL="$JOB"; else LABEL="$WT_NAME: $JOB"; fi
+
+PANE="$(herdr tab create --workspace "$WORKSPACE" --label "$LABEL" --no-focus \
   | python3 -c 'import sys,json; print(json.load(sys.stdin)["result"]["root_pane"]["pane_id"])')"
 
 herdr pane run "$PANE" "cd $WORKTREE"

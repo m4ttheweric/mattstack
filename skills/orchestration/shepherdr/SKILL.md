@@ -147,6 +147,8 @@ Write each brief to the scratchpad, one file per job, using the template above.
 
 Placement, auto-decided: 1-2 agents same repo = split panes; 3+ = tab per agent; different repos = workspace per repo; "background" = unfocused workspace. `--no-focus` on everything.
 
+Labels carry location: the sidebar label is the only thing that tells the user where a pane's files live. Job tabs are labeled `<worktree-name>: <job>` (spawn-agent.sh builds this itself); any tab you create by hand in an existing workspace follows the same form, `<worktree-name>: <purpose>`. New workspaces need no `--label` -- the default already follows the worktree directory name; don't override it with one that hides the worktree.
+
 Spawn each agent with the script (worktree + tab + claude + readiness wait + kickoff in one call):
 
 ```bash
