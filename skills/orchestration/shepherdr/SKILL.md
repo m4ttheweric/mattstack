@@ -9,7 +9,7 @@ You are the shepherd: a thin delegator, not a reviewer. You break work into jobs
 
 **Your context is the most expensive context in the system.** Everything you read is re-billed on every later turn. The discipline that follows:
 
-- Agents talk to you through small files in `.shepherdr/`, never through scrollback. Read a pane only to diagnose an agent that went idle without writing a file, or crashed.
+- Agents talk to you through small files in their job dir (`~/.shepherdr/jobs/<repo>/<job>/`), never through scrollback. Read a pane only to diagnose an agent that went idle without writing a file, or crashed.
 - You never read specs, plans, diffs, or code. Artifact review belongs to the user or a disposable reviewer agent, never to you.
 - You never do hands-on work: no merging, no fixing, no pushing. Integration is itself a job.
 
@@ -34,11 +34,15 @@ For herdr CLI mechanics, load the `herdr` skill.
 
 If work arrives unscoped and the user wants it scoped before fan-out, brainstorm with them directly yourself (no pane, no relay), then spawn execution jobs from the result.
 
-## the .shepherdr/ contract
+## the job-dir contract
 
-All shepherd-agent communication lives in `<worktree>/.shepherdr/`. Agents never commit this directory.
+All shepherd-agent communication lives in `~/.shepherdr/jobs/<repo>/<job>/` --
+OUTSIDE every repo. Contract files must never appear in `git status` of any
+worktree; the repo footprint of the contract is zero. spawn-agent.sh creates
+the dir, copies the brief in, and gives the agent its absolute path in the
+kickoff.
 
-- `job.md` -- the brief. You write it before spawning.
+- `job.md` -- the brief. You write it to the scratchpad; spawn copies it in.
 - `question.md` -- the agent writes it when it needs the user, then stops.
 - `report.md` -- the agent writes it at completion, per the brief's contract.
 
@@ -66,7 +70,8 @@ policy, gates to load (absolute paths). "none" if the repo has no rules.>
 <commands that must pass before the job is done>
 
 ## Asking Matt a question
-Write `.shepherdr/question.md` exactly in this format, then stop and wait.
+Write `question.md` in your job directory (the absolute path from your
+kickoff -- NOT inside the repo) exactly in this format, then stop and wait.
 The answer arrives as your next message.
 
     # QUESTION
@@ -89,7 +94,7 @@ recommendation. If the question truly cannot be carried by a file
 after you receive the answer.
 
 ## Reporting
-When the job is complete, write `.shepherdr/report.md`, then stop:
+When the job is complete, write `report.md` in your job directory, then stop:
 
     # REPORT
     status: done | done-with-issues
@@ -105,7 +110,9 @@ Report milestone artifacts as they land (design jobs): add a line
 `spec: <path>` or `plan: <path>` and stop for review.
 
 ## Git
-Commit incrementally on this branch. Never push. Never commit `.shepherdr/`.
+Commit incrementally on this branch. Never push. Job/question/report and any
+scratch files belong in your job directory, never in the repo -- the worktree
+must contain only the work itself.
 ```
 
 No hard size cap on question.md: the bar is that the user can answer from the file alone. Context runs as long as it needs to; target under a screenful.
@@ -180,7 +187,7 @@ Prints one line per status transition (`1-3 working -> idle`), including `-> blo
 | blocked | Check `question.md` first; only then read the pane |
 | gone / shell prompt where claude was | Crashed: report to user with pane id. Never silently respawn |
 
-Check for the files with `ls` and read them with Read. Never read scrollback when a contract file exists.
+Check for the files with `ls ~/.shepherdr/jobs/<repo>/<job>/` and read them with Read. Never read scrollback when a contract file exists.
 
 ## question relay
 
@@ -227,7 +234,8 @@ If the user redirects scope: ask whether to let running agents finish or kill th
    ```
 2. Flag drift and failures.
 3. Ask: close panes or keep for review?
-4. Offer worktree cleanup (`git worktree remove <path>`); never auto-remove.
+4. Offer worktree cleanup (`git worktree remove <path>`) and job-dir cleanup
+   (`rm -r ~/.shepherdr/jobs/<repo>/<job>`); never auto-remove either.
 5. Never push on the agents' behalf.
 
 ## red flags -- stop yourself
