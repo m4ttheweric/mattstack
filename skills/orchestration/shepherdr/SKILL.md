@@ -1,5 +1,5 @@
 ---
-name: shepherdr
+name: mattstack:shepherdr
 description: "Shepherd a herd of Claude Code agents via herdr panes. Use when the user wants to fan out work across multiple agents, run parallel brainstorms, delegate parallel tasks, or says 'shepherdr', 'shepherd', 'fan out', 'spawn agents', 'delegate this', 'split this across agents', 'herd this', or 'run these in parallel with herdr'."
 ---
 
@@ -178,8 +178,14 @@ Set up immediately after spawning; then do nothing until an event fires.
 **Completion watcher per agent** (background Bash):
 
 ```bash
-herdr wait agent-status <pane-id> --status idle --timeout 3600000
+herdr wait agent-status <pane-id> --status done --timeout 3600000
 ```
+
+Watch for `done`, NOT `idle`. herdr distinguishes the two: `done` means
+the agent finished but the pane has not been focused yet; `idle` only
+triggers AFTER someone views the pane (focusing transitions done -> idle).
+Watching for `idle` misses completions on unfocused panes -- the shepherd
+appears stuck until the user manually focuses the pane.
 
 One hour, not 10-15 minutes -- short timeouts expire on healthy agents. On expiry: one cheap `herdr pane list` status check, re-arm if still working.
 
@@ -195,9 +201,9 @@ Prints one line per status transition (`1-3 working -> idle`), including `-> blo
 
 | Event | Action |
 |---|---|
-| idle + `question.md` exists | Relay (below) |
-| idle/done + `report.md` exists | Completion (below) |
-| idle + neither file | Diagnose: `herdr pane read <pane> --source recent-unwrapped --lines 30`, one follow-up prompt if recoverable |
+| done + `question.md` exists | Relay (below) |
+| done + `report.md` exists | Completion (below) |
+| done + neither file | Diagnose: `herdr pane read <pane> --source recent-unwrapped --lines 30`, one follow-up prompt if recoverable |
 | blocked | Check `question.md` first; only then read the pane |
 | gone / shell prompt where claude was | Crashed: report to user with pane id. Never silently respawn |
 
