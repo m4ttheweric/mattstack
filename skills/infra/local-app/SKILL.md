@@ -1,16 +1,15 @@
 ---
 name: mattstack:local-app
-description: "Set up a local web app as a persistent macOS service with HTTPS via portless and launchd, optionally exposed publicly through a Cloudflare tunnel. Use when the user says 'set up as a local service', 'make this run on localhost', 'add to portless', 'create a launchd service', 'make this a .localhost app', 'expose this publicly', 'add a cloudflare tunnel', or when bootstrapping a new local web project that should run persistently."
+description: "Set up a local web app as a persistent macOS service with HTTPS via portless and launchd, automatically public at <name>.m4tthew.dev via the shared wildcard Cloudflare tunnel. Use when the user says 'set up as a local service', 'make this run on localhost', 'add to portless', 'create a launchd service', 'make this a .localhost app', 'expose this publicly', 'add a cloudflare tunnel', or when bootstrapping a new local web project that should run persistently."
 ---
 
 # local-app
 
-Register a local web app as a persistent macOS service: HTTPS `.localhost` domain via portless, auto-start via launchd, log directory, and health check. Optionally expose it publicly at `<name>.m4tthew.dev` through a Cloudflare tunnel.
+Register a local web app as a persistent macOS service: HTTPS `.localhost` domain via portless, auto-start via launchd, log directory, and health check. Every portless-aliased app is also automatically public at `https://<name>.m4tthew.dev`.
 
-There are two layers, added independently:
+How the public side works: the shared Cloudflare tunnel (config in `~/.cloudflared/m4tthew-apps-tunnel.yml`, run by the `com.matthewgoodwin.m4tthew-apps-tunnel` launchd service) carries a wildcard ingress routing `*.m4tthew.dev` to the local-apps gateway on localhost:7950, which resolves the subdomain against the portless alias table. Registering an alias is therefore all it takes ... no per-app tunnel, DNS route, or tunnel plist.
 
-1. **Local service (always):** launchd runs the app; portless gives it a stable `https://<name>.localhost` URL on the LAN.
-2. **Public tunnel (opt-in):** a dedicated Cloudflare tunnel maps `https://<name>.m4tthew.dev` to the local port. Most `.localhost` apps do NOT have a tunnel ... only add one when the user asks for public access.
+IMPORTANT ... this means `portless alias` makes an app *reachable* on the internet, but the local-apps gateway (the `local-apps` project, which owns :7950) now gates every public request: an app is only served publicly when its publish toggle is on, and behind a password if one is set. New aliases default to published. Manage this from the local-apps dashboard (`apps.localhost`). If the app serves anything private, tell the user they can unpublish it or set a password there.
 
 ## Information to gather
 
@@ -24,7 +23,7 @@ Before doing anything, determine these values. Ask the user only for what you ca
 | **working_dir** | Current working directory | Ask |
 | **entry_command** | Detect runtime: `bun` -> `bun src/server.ts` or `bun run start`; `node` -> `node src/server.js`; `deno` -> `deno run -A src/server.ts`. Check `package.json` scripts for a `start` or `dev` script. | Ask |
 | **env_vars** | At minimum `PORT`. Scan `.env` for non-secret vars needed at runtime. Never put secrets in the plist -- use `.env` file loading in the app. | `PORT` only |
-| **public?** | Only if the user asks to expose it publicly | Default: no tunnel |
+| **ok to be public?** | Aliased apps are public at `<name>.m4tthew.dev` automatically. Flag it if the app looks private (auth-less admin UI, personal data) | Assume public is fine for shareable apps |
 
 If the app serves a built frontend only when a `dist`/`build` dir exists (common with Vite), run the production build first (`bun run build` or equiv) so launchd serves real assets, not just the API.
 
@@ -131,9 +130,19 @@ tail -20 {working_dir}/logs/server.err.log
 
 If the domain 404s but the direct port is healthy, the proxy needs the sudo restart from step 4.
 
-### 7. Expose publicly via Cloudflare tunnel (opt-in)
+### 7. Verify the public URL
 
-Only when the user wants public access. Each public app gets its own named tunnel mapping `<app_name>.m4tthew.dev` to the local port. (Pattern reference: `~/.cloudflared/barn.yml`.)
+The wildcard tunnel makes the app public as soon as the alias is registered. Just confirm:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" https://{app_name}.m4tthew.dev/
+```
+
+A 200 means done. If it fails but the `.localhost` domain works, check that the shared tunnel is up (`launchctl list | grep tunnel` -> `com.matthewgoodwin.m4tthew-apps-tunnel`) and that `~/.cloudflared/m4tthew-apps-tunnel.yml` still carries the `*.m4tthew.dev` -> `http://localhost:7950` ingress. If the domain returns a "nothing here" 404, the app may just be unpublished in the local-apps dashboard (`apps.localhost`) -- toggle it public there.
+
+#### Fallback: dedicated tunnel (only for apps NOT aliased in portless)
+
+An app that bypasses portless (e.g. barn on its own port) needs its own named tunnel. Skip this entire section for anything registered with `portless alias`.
 
 1. **Create the tunnel** (writes a `<uuid>.json` credentials file into `~/.cloudflared/`):
 
@@ -202,10 +211,10 @@ Only when the user wants public access. Each public app gets its own named tunne
 ### 8. Report
 
 Tell the user:
-- The app is live at `https://{app_name}.localhost` (and `https://{app_name}.m4tthew.dev` if tunneled)
+- The app is live at `https://{app_name}.m4tthew.dev` (public, shareable) and `https://{app_name}.localhost` (local)
 - It auto-starts on login
 - Logs are at `{working_dir}/logs/`
-- If you added a portless alias, remind them to run the sudo proxy restart if the domain isn't resolving yet
+- If you added a portless alias, remind them to run the sudo proxy restart if the `.localhost` domain isn't resolving yet
 - To restart the app: `launchctl unload ~/Library/LaunchAgents/com.matthewgoodwin.{app_name}.plist && launchctl load ~/Library/LaunchAgents/com.matthewgoodwin.{app_name}.plist`
 - To stop permanently: `launchctl unload ~/Library/LaunchAgents/com.matthewgoodwin.{app_name}.plist`
 
@@ -225,12 +234,12 @@ Same pattern for the `-tunnel` plist if the app is tunneled.
 If asked to remove a service:
 
 ```bash
-# Local service + route
+# Local service + route (removing the alias also removes the public {app_name}.m4tthew.dev URL)
 launchctl unload ~/Library/LaunchAgents/com.matthewgoodwin.{app_name}.plist
 rm ~/Library/LaunchAgents/com.matthewgoodwin.{app_name}.plist
 portless alias --remove {app_name}
 
-# Public tunnel, if one was set up
+# Dedicated tunnel, only if the app had one (non-aliased apps)
 launchctl unload ~/Library/LaunchAgents/com.matthewgoodwin.{app_name}-tunnel.plist
 rm ~/Library/LaunchAgents/com.matthewgoodwin.{app_name}-tunnel.plist
 /opt/homebrew/bin/cloudflared tunnel route dns --overwrite-dns {app_name} {app_name}.m4tthew.dev  # or delete the DNS record in the dashboard
