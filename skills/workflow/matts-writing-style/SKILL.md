@@ -15,6 +15,7 @@ These rules apply to any text that will be posted under Matthew's name: MR descr
 - **Lowercase for technical content.** Assertions, findings, and code discussion are lowercase except proper nouns, ticket prefixes, and code. Short social lines (`Looks good to me! Made some comments.`, `Left a few comments!`) take normal sentence case.
 - **No markdown furniture in MR comments.** No lists, no headings, and no bold except the Conventional Comments label that opens a finding. Fenced code blocks and inline backticks are fine and expected in review findings; short replies stay plain text.
 - **Keep it sparse.** Cut every word that isn't pulling weight. Sparse means no padding, not short: a review finding runs as long as it needs.
+- **Don't walk the same fact twice.** Stating the mechanism (`X returns false`) and then restating its downstream consequence in a new paragraph (`so Y writes false, Z writes null`) is the same fact one step further. Pick the sentence that lands the ask; delete the other.
 - **One claim per paragraph.** Split the mechanism from the consequence even when it's only two sentences. A reviewer skims, so structure for skimming even when the prose stays plain.
 - **Pull code out of the prose.** More than a few tokens of code (a full expression, a suggested function/predicate, a snippet) goes in its own fenced block on its own line, never inlined mid-sentence. Inline backticks are for short references (a symbol, a type, `foo.bar`), not for a whole line of code the reader has to parse inside a paragraph. After a fenced block, the sentence that finishes the ask ends there; the rationale starts a new paragraph. The reader should be able to stop after the ask.
 
@@ -26,9 +27,9 @@ Honest hedging is welcome, but hedge inside the claim, not in front of it. "the 
 
 ### MR Review Findings (you're the reviewer, inline threads)
 
-The dominant genre, and it is not short: as long as the finding needs, commonly 3-6 paragraphs. Inline threads carry the substance. One finding per thread, anchored to the line it's about.
+The dominant genre. As long as the finding needs, commonly 2-4 paragraphs; go past 4 only when the mechanism truly needs walking. If you're at 5+, check for repetition first. Inline threads carry the substance. One finding per thread, anchored to the line it's about.
 
-Open with a Conventional Comments label (https://conventionalcomments.org/) so the author can triage without reading the whole thing: issue, suggestion, question, nitpick, thought, with a decoration when it helps. The label is **bolded markdown, never a code span**: write `**thought (non-blocking):**`, not `` `thought (non-blocking):` ``. The label is triage information the author can't get anywhere else; it is not a license for throat-clearing after it.
+Open with a Conventional Comments label (https://conventionalcomments.org/) so the author can triage without reading the whole thing: issue, suggestion, question, nitpick, thought, with a decoration when it helps. Pick the label by what you're asking the author to do: `question` when you don't know if it's broken and need them to check; `issue` when you know it's broken (add `(non-blocking)` if you're not blocking on the fix); `suggestion` for design or style opinions; `nitpick` for trivia; `thought` when you're just musing. The label is **bolded markdown, never a code span**: write `**thought (non-blocking):**`, not `` `thought (non-blocking):` ``. The label is triage information the author can't get anywhere else; it is not a license for throat-clearing after it.
 
 The shape of a finding:
 
@@ -49,7 +50,15 @@ Verified numbers get cited flatly. Don't manufacture precision: "most archived i
 
 One reason is enough. Once the ask lands, delete the second supporting argument ("side benefit:", "bonus:", "also this would let us..."). It reads as selling, even when it's true.
 
+One ask is enough too. Don't offer "either fix it this way or defer"; the author already knows deferring is an option. Pick the remediation you'd expect them to reach for and let them push back if they'd choose the other.
+
 Stick to the code in the diff. No scope commentary ("i don't think this MR can fix the reported symptom"); that's the author's and PM's call to make.
+
+The 2-4 paragraph shape is for a substantive code finding, where the mechanism has to be walked. A process ask (missing verification evidence, "please add a test", a nit) is not that finding, and dressing it in the same scaffolding reads as ceremonious. Keep it to one or two casual lines: lead with the approval, phrase the ask as a favor, point at the obvious subject in a few words, and stop. Drop the mechanism recap, the pasted URL, and the paragraph split. An emoji is fine. The whole comment can be:
+
+```
+suggestion: changes look good. would you mind grabbing some verification evidence? running your new code against the QA claim from the ticket would be 👌
+```
 
 ### MR Review Summary Note
 
